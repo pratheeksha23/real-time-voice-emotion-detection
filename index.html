@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Voice Emotion AI</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body {
+    background: radial-gradient(circle at 50% 20%, #1a1035 0%, #05030d 60%, #000000 100%);
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    overflow: hidden;
+  }
+  .glass {
+    background: rgba(255, 255, 255, 0.04);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .glow-ring {
+    box-shadow: 0 0 60px 10px var(--glow-color, #22d3ee55), inset 0 0 40px var(--glow-color, #22d3ee33);
+    transition: box-shadow 0.6s ease, border-color 0.6s ease;
+  }
+  #micBtn {
+    transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  #micBtn.active {
+    transform: scale(1.05);
+  }
+  .pulse {
+    animation: pulseAnim 2.2s infinite ease-in-out;
+  }
+  @keyframes pulseAnim {
+    0%, 100% { transform: scale(1); opacity: 0.6; }
+    50% { transform: scale(1.15); opacity: 0.15; }
+  }
+  .fade-in {
+    animation: fadeIn 0.5s ease forwards;
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  ::-webkit-scrollbar { display: none; }
+</style>
+</head>
+<body class="min-h-screen w-full flex items-center justify-center text-white relative">
+
+  <div class="absolute top-8 left-1/2 -translate-x-1/2 text-center z-20">
+    <h1 class="text-2xl font-semibold tracking-wide bg-clip-text text-transparent bg-gradient-to-r from-cyan-300 via-purple-300 to-pink-300">
+      Real-Time Voice Emotion Recognition
+    </h1>
+    <p class="text-xs text-gray-400 mt-1 tracking-widest uppercase">Neural Audio Analysis Engine</p>
+  </div>
+
+  <div class="relative flex flex-col items-center justify-center gap-10 z-10">
+    <div class="relative flex items-center justify-center" style="width:340px;height:340px;">
+      <div id="pulseRing" class="absolute inset-0 rounded-full pulse" style="background: radial-gradient(circle, var(--emotion-color, #22d3ee) 0%, transparent 70%); opacity:0.25;"></div>
+
+      <div id="glowContainer" class="glow-ring rounded-full p-1 transition-all duration-700" style="--glow-color:#22d3ee55;">
+        <div class="glass rounded-full flex items-center justify-center" style="width:300px;height:300px;">
+          <canvas id="visualizer" width="300" height="300"></canvas>
+        </div>
+      </div>
+
+      <div class="absolute flex flex-col items-center justify-center pointer-events-none">
+        <span id="emotionEmoji" class="text-5xl mb-2 transition-all duration-500">🎙️</span>
+        <span id="emotionLabel" class="text-xl font-bold tracking-wide capitalize transition-all duration-500 text-gray-200">Idle</span>
+        <span id="emotionConfidence" class="text-xs text-gray-400 mt-1">Awaiting input</span>
+      </div>
+    </div>
+
+    <button id="micBtn" class="glass rounded-full w-20 h-20 flex items-center justify-center border border-white/10 hover:border-white/30 focus:outline-none">
+      <svg id="micIcon" xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-white transition-colors duration-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3.75 3.75 0 003.75-3.75V4.5a3.75 3.75 0 10-7.5 0v7.5A3.75 3.75 0 0012 15.75z" />
+      </svg>
+    </button>
+
+    <div id="statusBar" class="glass rounded-full px-5 py-2 text-xs text-gray-300 flex items-center gap-2 fade-in">
+      <span id="statusDot" class="w-2 h-2 rounded-full bg-gray-500"></span>
+      <span id="statusText">Microphone inactive</span>
+    </div>
+  </div>
+
+<script>
+const EMOTIONS = {
+  neutral: { color: [34, 211, 238], emoji: "🎙️", label: "Idle" },
+  happy:   { color: [250, 204, 21], emoji: "😄", label: "Happy" },
+  sad:     { color: [59, 130, 246], emoji: "😢", label: "Sad" },
+  angry:   { color: [239, 68, 68],  emoji: "😠", label: "Angry" },
+  confused:{ color: [168, 85, 247], emoji: "😕", label: "Confused" },
+};
+
+let currentColor = [...EMOTIONS.neutral.color];
+let targetColor = [...EMOTIONS.neutral.color];
+
+const micBtn = document.getElementById("micBtn");
+const micIcon = document.getElementById("micIcon");
+const emotionLabel = document.getElementById("emotionLabel");
+const emotionEmoji = document.getElementById("emotionEmoji");
+const emotionConfidence = document.getElementById("emotionConfidence");
+const statusText = document.getElementById("statusText");
+const statusDot = document.getElementById("statusDot");
+const glowContainer = document.getElementById("glowContainer");
+const canvas = document.getElementById("visualizer");
+const ctx = canvas.getContext("2d");
+
+let audioContext, analyser, sourceNode, dataArray, bufferLength;
+let mediaStream = null;
+let isActive = false;
+let animationId = null;
+let cycleTimeout = null;
+let isSending = false;
+
+function rgbStr(arr, alpha) {
+  return `rgba(${Math.round(arr[0])}, ${Math.round(arr[1])}, ${Math.round(arr[2])}, ${alpha})`;
+}
+
+function setEmotionUI(key, confidence) {
+  const e = EMOTIONS[key] || EMOTIONS.neutral;
+  targetColor = [...e.color];
+  emotionLabel.textContent = e.label;
+  emotionEmoji.textContent = e.emoji;
+  emotionLabel.style.color = rgbStr(e.color, 1);
+  if (confidence !== undefined) {
+    emotionConfidence.textContent = `${Math.round(confidence * 100)}% confidence`;
+  }
+  const hex = rgbStr(e.color, 0.45);
+  glowContainer.style.setProperty("--glow-color", hex);
+  document.getElementById("pulseRing").style.setProperty("--emotion-color", rgbStr(e.color, 1));
+}
+
+function lerpColor() {
+  for (let i = 0; i < 3; i++) {
+    currentColor[i] += (targetColor[i] - currentColor[i]) * 0.08;
+  }
+}
+
+function drawVisualizer() {
+  animationId = requestAnimationFrame(drawVisualizer);
+  lerpColor();
+
+  const w = canvas.width;
+  const h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+
+  const cx = w / 2;
+  const cy = h / 2;
+  const baseRadius = 70;
+  const barCount = 64;
+
+  if (analyser) {
+    analyser.getByteFrequencyData(dataArray);
+  }
+
+  ctx.save();
+  ctx.translate(cx, cy);
+
+  for (let i = 0; i < barCount; i++) {
+    const angle = (i / barCount) * Math.PI * 2;
+    let amp = 4;
+    if (dataArray) {
+      const idx = Math.floor((i / barCount) * bufferLength);
+      amp = (dataArray[idx] || 0) / 255 * 60 + 4;
+    } else {
+      amp = 4 + Math.sin(Date.now() / 400 + i) * 2;
+    }
+
+    const x1 = Math.cos(angle) * baseRadius;
+    const y1 = Math.sin(angle) * baseRadius;
+    const x2 = Math.cos(angle) * (baseRadius + amp);
+    const y2 = Math.sin(angle) * (baseRadius + amp);
+
+    ctx.strokeStyle = rgbStr(currentColor, 0.9);
+    ctx.shadowColor = rgbStr(currentColor, 0.8);
+    ctx.shadowBlur = 12;
+    ctx.lineWidth = 3;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+  }
+
+  ctx.beginPath();
+  ctx.arc(0, 0, baseRadius - 8, 0, Math.PI * 2);
+  ctx.strokeStyle = rgbStr(currentColor, 0.3);
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+async function sendChunk(blob) {
+  if (isSending) return;
+  isSending = true;
+  try {
+    const formData = new FormData();
+    formData.append("file", blob, "chunk.webm");
+    const res = await fetch("/predict", { method: "POST", body: formData });
+    if (!res.ok) {
+      throw new Error("Prediction failed");
+    }
+    const data = await res.json();
+    setEmotionUI(data.dominant_emotion, data.scores ? data.scores[data.dominant_emotion] : undefined);
+    statusText.textContent = "Listening & analyzing...";
+    statusDot.className = "w-2 h-2 rounded-full bg-green-400";
+  } catch (err) {
+    statusText.textContent = "Analysis error, retrying...";
+    statusDot.className = "w-2 h-2 rounded-full bg-red-400";
+  } finally {
+    isSending = false;
+  }
+}
+
+function getMimeType() {
+  const options = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/ogg"];
+  for (const opt of options) {
+    if (MediaRecorder.isTypeSupported(opt)) return opt;
+  }
+  return "";
+}
+
+function recordCycle() {
+  if (!isActive || !mediaStream) return;
+
+  const mimeType = getMimeType();
+  const recorder = mimeType
+    ? new MediaRecorder(mediaStream, { mimeType })
+    : new MediaRecorder(mediaStream);
+
+  const chunks = [];
+
+  recorder.ondataavailable = (e) => {
+    if (e.data && e.data.size > 0) chunks.push(e.data);
+  };
+
+  recorder.onstop = () => {
+    if (chunks.length > 0) {
+      const blob = new Blob(chunks, { type: mimeType || "audio/webm" });
+      sendChunk(blob);
+    }
+    if (isActive) {
+      cycleTimeout = setTimeout(recordCycle, 50);
+    }
+  };
+
+  recorder.start();
+  setTimeout(() => {
+    if (recorder.state !== "inactive") recorder.stop();
+  }, 3000);
+}
+
+async function startMic() {
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    sourceNode = audioContext.createMediaStreamSource(mediaStream);
+    analyser = audioContext.createAnalyser();
+    analyser.fftSize = 256;
+    bufferLength = analyser.frequencyBinCount;
+    dataArray = new Uint8Array(bufferLength);
+    sourceNode.connect(analyser);
+
+    isActive = true;
+    micBtn.classList.add("active");
+    micIcon.classList.remove("text-white");
+    micIcon.classList.add("text-cyan-300");
+    statusText.textContent = "Listening & analyzing...";
+    statusDot.className = "w-2 h-2 rounded-full bg-green-400";
+
+    recordCycle();
+  } catch (err) {
+    statusText.textContent = "Microphone access denied";
+    statusDot.className = "w-2 h-2 rounded-full bg-red-400";
+  }
+}
+
+function stopMic() {
+  isActive = false;
+  clearTimeout(cycleTimeout);
+
+  if (mediaStream) {
+    mediaStream.getTracks().forEach((track) => track.stop());
+    mediaStream = null;
+  }
+  if (audioContext) {
+    audioContext.close();
+    audioContext = null;
+    analyser = null;
+    dataArray = null;
+  }
+
+  micBtn.classList.remove("active");
+  micIcon.classList.remove("text-cyan-300");
+  micIcon.classList.add("text-white");
+  statusText.textContent = "Microphone inactive";
+  statusDot.className = "w-2 h-2 rounded-full bg-gray-500";
+  setEmotionUI("neutral");
+  emotionConfidence.textContent = "Awaiting input";
+}
+
+micBtn.addEventListener("click", () => {
+  if (isActive) {
+    stopMic();
+  } else {
+    startMic();
+  }
+});
+
+setEmotionUI("neutral");
+drawVisualizer();
+</script>
+</body>
+</html>
