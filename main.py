@@ -4,7 +4,7 @@ import subprocess
 import numpy as np
 import librosa
 import torch
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from transformers import pipeline
@@ -57,11 +57,16 @@ async def root():
     return FileResponse("index.html")
 
 @app.post("/predict")
-async def predict(file: UploadFile = File(...)):
+async def predict(request: Request):
     raw_path = None
     wav_path = None
 
     try:
+        form = await request.form()
+        file = form.get("file")
+        if not file:
+            return {"dominant_emotion": "neutral", "scores": {"neutral": 1.0}}
+            
         contents = await file.read()
         if not contents:
             return {"dominant_emotion": "neutral", "scores": {"neutral": 1.0}}
